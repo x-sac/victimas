@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Victimas de homicidios</title>
+    <link rel='stylesheet' href='https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css' />
+    <script src='https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js'></script>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+        }
+
+        html,
+        body,
+        #map {
+            height: 100%;
+        }
+
+        /* Estilo para la caja de la simbología */
+        .info-box {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            background-color: white;
+            border: 2px solid #ccc;
+            border-radius: 10px;
+            padding: 15px;
+            width: 250px;
+            font-family: 'Space Grotesk', sans-serif;
+            box-shadow: 0px 4px 6px rgba(0, 0, 0, 0.1);
+        }
+
+        .info-box h2 {
+            font-weight: bold;
+            font-size: 18px;
+            margin: 0;
+            padding-bottom: 10px;
+        }
+
+        .info-box .legend {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .legend div {
+            display: flex;
+            align-items: center;
+            margin-bottom: 5px;
+        }
+
+        .legend .color-box {
+            width: 20px;
+            height: 20px;
+            margin-right: 10px;
+        }
+
+        /* Espaciado entre elementos */
+        .info-box p {
+            margin: 0;
+            padding-bottom: 10px;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="map"></div>
+    <div class="info-box">
+        <h2>Victimas de homicidio en Sinaloa</h2>
+        <p><strong>Victimas totales</strong></p>
+        <div class="legend">
+            <div>
+                <div class="color-box" style="background-color: #ffffff;"></div>
+                <span>NA (sin datos)</span>
+            </div>
+            <div>
+                <div class="color-box" style="background-color: #f5ba98;"></div>
+                <span>0 - 3</span>
+            </div>
+            <div>
+                <div class="color-box" style="background-color: #ee8a82;"></div>
+                <span>3 - 5</span>
+            </div>
+            <div>
+                <div class="color-box" style="background-color: #dc7176;"></div>
+                <span>5 - 18</span>
+            </div>
+            <div>
+                <div class="color-box" style="background-color: #c8586c;"></div>
+                <span>18 - 246</span>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Inicializar el mapa
+        const map = new maplibregl.Map({
+            container: 'map',
+            style: 'https://basemaps.cartocdn.com/gl/positron-gl-style/style.json',
+            center: [-108.5, 24.3], // Coordenadas iniciales para Sinaloa
+            zoom: 7
+        });
+
+        // Cargar el GeoJSON y aplicar la clasificación de Natural Breaks personalizada
+        map.on('load', () => {
+            fetch('./victimas.geojson')  // Asegúrate de que la ruta sea correcta
+                .then(response => response.json())
+                .then(data => {
+                    // Extraer los valores de "numero_de_"
+                    const victims = data.features.map(feature => feature.properties.numero_de_);
+
+                    // Verifica que los datos sean correctos
+                    console.log('Victims:', victims);
+
+                    // Asegúrate de que los datos no estén vacíos
+                    if (victims.length === 0) {
+                        console.error('No se encontraron datos válidos de víctimas.');
+                        return;
+                    }
+
+                    // **Intervalos personalizados basados en los valores de QGIS**
+                    const breaks = [0, 3, 5, 18, 246]; // Los intervalos que mencionas: 0-0, 0-3, 3-5, 5-18, 18-246
+
+                    // Filtrar valores repetidos y ordenar los puntos de corte
+                    const uniqueBreaks = Array.from(new Set(breaks)).sort((a, b) => a - b);
+                    console.log('Breaks de Jenks:', uniqueBreaks);
+
+                    // Añadir la fuente de datos al mapa
+                    map.addSource('victimas', {
+                        'type': 'geojson',
+                        'data': data
+                    });
+
+                    // Crear una capa para visualizar las víctimas con los colores de clasificación
+                    map.addLayer({
+                        'id': 'victimas-layer',
+                        'type': 'fill',
+                        'source': 'victimas',
+                        'paint': {
+                            'fill-color': [
+                                'case',
+                                ['==', ['get', 'numero_de_'], 0], // Si el valor es 0
+                                'transparent', // Color transparente para "0"
+                                [
+                                    'interpolate',
+                                    ['linear'],
+                                    ['get', 'numero_de_'],  // Asegúrate de que el nombre de la propiedad sea correcto
+                                    uniqueBreaks[0], '#f5ba98',
+                                    uniqueBreaks[1], '#ee8a82',
+                                    uniqueBreaks[2], '#dc7176',
+                                    uniqueBreaks[3], '#c8586c',
+                                    uniqueBreaks[4], '#9c3f5d'
+                                ]
+                            ],
+                            'fill-opacity': 0.7,
+                            'fill-outline-color': '#000000' // Añadir contorno negro
+                        }
+                    });
+
+                    // Crear el popup
+                    let popup = new maplibregl.Popup({ closeButton: false, closeOnClick: false });
+
+                    // Variable para controlar si el popup está fijado por un clic
+                    let isPopupFixed = false;
+                    let currentFeatureId = null;  // Variable para controlar el municipio actual
+
+                    // Agregar un popup al pasar el cursor sobre un municipio
+                    map.on('mousemove', 'victimas-layer', (e) => {
+                        if (isPopupFixed) return; // No cambiar el popup si ya está fijado
+
+                        const coordinates = e.lngLat;
+                        const properties = e.features[0].properties;
+
+                        // Verificar si las propiedades existen antes de usarlas
+                        const municipio = properties.NOMGEO || 'N/A';
+                        const victimas = properties.numero_de_ || 'N/A';
+
+                        // Crear contenido del popup
+                        const popupContent = `
+                            <strong>Información del municipio</strong><br>
+                            <strong>Municipio:</strong> ${municipio}<br>
+                            <strong>Victimas:</strong> ${victimas}<br>
+                        `;
+
+                        // Actualizar el contenido del popup
+                        popup.setLngLat(coordinates)
+                            .setHTML(popupContent)
+                            .addTo(map);
+
+                        map.setPaintProperty('victimas-layer', 'fill-color', [
+                            'case',
+                            // Si el valor de "numero_de_" es 0, asignamos un color neutro (gris claro o blanco)
+                            ['==', ['get', 'numero_de_'], 0],
+                            '#f7f7f7',  // Color neutro (gris claro o blanco) para municipios con 0 víctimas
+
+                            // Si es el municipio bajo el cursor, resaltamos solo ese
+                            ['==', ['get', 'CVEGEO'], e.features[0].properties.CVEGEO], // Comparar CVEGEO para iluminar solo el municipio
+                            '#2a5674',  // Color de resaltado (azul)
+
+                            // Para los demás municipios, aplicamos la interpolación normal
+                            [
+                                'interpolate',
+                                ['linear'],
+                                ['get', 'numero_de_'],
+                                uniqueBreaks[0], '#f5ba98',
+                                uniqueBreaks[1], '#ee8a82',
+                                uniqueBreaks[2], '#dc7176',
+                                uniqueBreaks[3], '#c8586c',
+                                uniqueBreaks[4], '#9c3f5d'
+                            ]
+                        ]);
+                    });
+
+                    // Evento para cuando el cursor entra en una geometría
+                    map.on('mouseenter', 'victimas-layer', (e) => {
+                        const coordinates = e.lngLat;
+                        const properties = e.features[0].properties;
+
+                        // Verificar si las propiedades existen antes de usarlas
+                        const municipio = properties.NOMGEO || 'N/A';
+                        const victimas = properties.numero_de_ || 'N/A';
+
+                        // Crear contenido del popup
+                        const popupContent = `
+                            <strong>Información del municipio</strong><br>
+                            <strong>Municipio:</strong> ${municipio}<br>
+                            <strong>Victimas:</strong> ${victimas}<br>
+                        `;
+
+                        // Mostrar el popup
+                        popup.setLngLat(coordinates)
+                            .setHTML(popupContent)
+                            .addTo(map);
+                    });
+
+                    // Evento para cuando el cursor sale de la geometría (restaurar el estilo original)
+                    map.on('mouseleave', 'victimas-layer', () => {
+                        if (!isPopupFixed) { // Eliminar solo si el popup no está fijado
+                            popup.remove();
+                        }
+
+                        // Restaurar el color original de los municipios
+                        map.setPaintProperty('victimas-layer', 'fill-color', [
+                            'case',
+                            ['==', ['get', 'numero_de_'], 0], // Si el valor es 0
+                            'transparent', // Color transparente para "0"
+                            [
+                                'interpolate',
+                                ['linear'],
+                                ['get', 'numero_de_'],
+                                uniqueBreaks[0], '#f5ba98',
+                                uniqueBreaks[1], '#ee8a82',
+                                uniqueBreaks[2], '#dc7176',
+                                uniqueBreaks[3], '#c8586c',
+                                uniqueBreaks[4], '#9c3f5d'
+                            ]
+                        ]);
+                    });
+
+                    // Evento de clic para fijar el popup
+                    map.on('click', 'victimas-layer', (e) => {
+                        const coordinates = e.lngLat;
+                        const properties = e.features[0].properties;
+
+                        // Verificar si las propiedades existen antes de usarlas
+                        const municipio = properties.NOMGEO || 'N/A';
+                        const victimas = properties.numero_de_ || 'N/A';
+
+                        // Crear contenido del popup
+                        const popupContent = `
+                            <strong>Información del municipio</strong><br>
+                            <strong>Municipio:</strong> ${municipio}<br>
+                            <strong>Victimas:</strong> ${victimas}<br>
+                        `;
+
+                        // Mostrar el popup en el lugar donde hiciste clic y fijarlo
+                        popup.setLngLat(coordinates)
+                            .setHTML(popupContent)
+                            .addTo(map);
+
+                        // Marcar que el popup está fijado
+                        isPopupFixed = true;
+                    });
+
+                    // Evento de clic en el mapa para remover el popup (si ya está fijado)
+                    map.on('click', (e) => {
+                        // Si se hace clic fuera de un municipio con el popup fijado, lo eliminamos
+                        if (isPopupFixed) {
+                            popup.remove();
+                            isPopupFixed = false; // El popup ya no está fijado
+                        }
+                    });
+
+                })
+                .catch(error => {
+                    console.error("Error al cargar el archivo GeoJSON:", error);
+                });
+
+            // Agregar controles de navegación
+            map.addControl(new maplibregl.NavigationControl({
+                visualizePitch: true,
+                showZoom: true,
+                showCompass: true
+            }), 'bottom-right');
+        });
+    </script>
+</body>
+
+</html>
